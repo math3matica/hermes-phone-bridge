@@ -35,6 +35,4 @@ never replace the frozen reference as part of a source-only change.
 
 ## License
 
-No license has been selected by the project owner. Choose and add one before
-public publication; until then, contributors should not assume redistribution
-rights.
+This project is licensed under MIT; see `LICENSE`.
