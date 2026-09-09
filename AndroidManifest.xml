@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.rex.sms"
+    android:versionCode="3"
+    android:versionName="1.2">
+
+    <uses-sdk
+        android:minSdkVersion="29"
+        android:targetSdkVersion="29" />
+
+    <!-- Network permission for localhost socket listener -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- SMS permissions -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Foreground service for persistent socket listener -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Notification permission for foreground service badge (API 33+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:label="RexBridge"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@android:style/Theme.Material.Light">
+
+        <!--
+            SetupActivity: Minimal entry point that requests SEND_SMS and RECEIVE_SMS
+            via standard runtime permission dialogs, then starts the service.
+        -->
+        <activity
+            android:name=".SetupActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            SmsBridgeService: Foreground service that listens on localhost:9999.
+
+            foregroundServiceType:
+              - Android 10 (API 29): attribute is ignored if omitted; any foreground
+                service works as long as it calls startForeground() with a notification.
+              - Android 14+ (API 34): requires a declared foregroundServiceType.
+                When targeting newer Android, set this to a type that fits the actual
+                workload. Options:
+                  "shortService"  — transient, bounded duration
+                  "connectedDevice" — persistent connection to a hardware device (fits
+                    our USB/ADB bridge use case on Android 14+)
+                  "dataSync"      — background data sync (has runtime duration limits,
+                    NOT ideal for a persistent bridge)
+                For now: omitted, since we target Android 10 and the system accepts it.
+        -->
+        <service
+            android:name=".SmsBridgeService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!--
+            SmsReceiver: Listens for incoming SMS broadcasts.
+            Receives android.provider.Telephony.SMS_RECEIVED and writes each
+            incoming message as a JSON file to the app-scoped external directory.
+            Does NOT require default SMS app status.
+        -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="1000">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

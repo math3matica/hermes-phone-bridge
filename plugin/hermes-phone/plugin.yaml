@@ -1,0 +1,13 @@
+name: hermes-phone
+version: 0.1.0
+description: "USB/ADB phone control with SMS, cellular calling, and selectable analog or Bluetooth call audio."
+author: Hermes-Phone
+kind: backend
+provides_tools:
+  - phone_status
+  - phone_sms_send
+  - phone_audio_test
+  - phone_audio_settings
+  - phone_call
+  - phone_call_status
+  - phone_hangup

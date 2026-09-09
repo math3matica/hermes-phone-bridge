@@ -1,0 +1,17 @@
+[Unit]
+Description=Hermes-Phone owner SMS relay
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hermes-phone-bridge/host
+Environment=HOME=%h
+Environment=HERMES_HOME=%h/.hermes
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/hermes/hermes-phone-relay.env
+ExecStart=/usr/bin/python3 %h/hermes-phone-bridge/host/hermes_phone_relay.py --owner ${HERMES_PHONE_OWNER} --poll-interval 5 --qwen-idle-timeout 0 --qwen-compose-dir ${HERMES_PHONE_QWEN_COMPOSE_DIR}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

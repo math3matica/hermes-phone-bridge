@@ -1,0 +1,38 @@
+# Generated/build output
+build/
+classes/
+gen/
+*.class
+*.dex
+*.jar
+*.args
+*.apk
+# Frozen APKs remain outside this standalone source tree.
+
+# Python environments and packaging output
+.venv/
+venv/
+dist/
+*.egg-info/
+
+# Android/IDE/local machine
+.gradle/
+.idea/
+*.iml
+local.properties
+.DS_Store
+Thumbs.db
+
+# Signing and credentials
+*.jks
+*.keystore
+*.bks
+*.p12
+.env
+.env.*
+
+# Runtime/device output
+*.log
+*.sqlite3
+.pytest_cache/
+__pycache__/
