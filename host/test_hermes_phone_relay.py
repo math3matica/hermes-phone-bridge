@@ -6,9 +6,11 @@ import subprocess
 import sys
 import time
 import wave
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import pytest
 import call_audio_loop
 
 from hermes_phone_relay import (
@@ -309,6 +311,7 @@ def test_idle_pre_call_state_does_not_require_dynamic_hfp_nodes(tmp_path):
     assert not lock_path.exists() or lock_path.read_text() == ""
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_idle_releases_a_job_blocked_only_by_active_call(tmp_path, monkeypatch):
     from rex_voice_v1.post_call import PostCallQueue
 
@@ -336,6 +339,7 @@ def test_idle_releases_a_job_blocked_only_by_active_call(tmp_path, monkeypatch):
     assert len(started) == 1
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_idle_releases_job_waiting_for_normal_model_after_qwen_recovery(tmp_path, monkeypatch):
     from rex_voice_v1.post_call import PostCallQueue
 
@@ -360,6 +364,7 @@ def test_idle_releases_job_waiting_for_normal_model_after_qwen_recovery(tmp_path
     assert len(started) == 1
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_idle_recovery_releases_before_launch_and_is_idempotent(tmp_path, monkeypatch):
     from rex_voice_v1.post_call import PostCallQueue
 
@@ -383,6 +388,7 @@ def test_idle_recovery_releases_before_launch_and_is_idempotent(tmp_path, monkey
     assert observed == ["released"]
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_idle_recovery_is_idempotent_for_released_job(tmp_path, monkeypatch):
     from rex_voice_v1.post_call import PostCallQueue
 
@@ -1096,7 +1102,15 @@ def test_call_audio_coordinator_ignores_transient_unknown_after_offhook():
 
 
 def test_call_audio_coordinator_keeps_host_sinks_muted_if_bounded_while_offhook():
-    coordinator = CallAudioCoordinator(CallAudioConfig(audio_backend="analog"))
+    coordinator = CallAudioCoordinator(
+        CallAudioConfig(audio_backend="analog"),
+        run=lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="Item0: 'Front Mic'\nItem0: 'Rear Mic'\n" if command[:4] == ["amixer", "-c", "0", "sget"] else "",
+            stderr="",
+        ),
+    )
     coordinator.phone_state = lambda: "OFFHOOK"
     coordinator._muted_host_sinks = ["alsa_output.pci-speakers"]
     restored = []
@@ -1491,6 +1505,7 @@ def test_post_call_worker_launch_waits_for_verified_qwen_and_is_idempotent(tmp_p
     assert launched == [("post-call-voice-1", "/models/Qwen3.8-27B-UD-Q4_K_XL.gguf", "Qwen 27B")]
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_post_call_worker_stays_blocked_when_qwen_restore_fails(tmp_path, monkeypatch):
     supervisor = tmp_path / "model_supervisor.sh"
     supervisor.write_text("#!/bin/sh\n")
