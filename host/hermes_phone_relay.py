@@ -202,6 +202,7 @@ class CallSessionSupervisor:
         mute_sinks: Any,
         restore_sinks: Any,
         on_end: Any | None = None,
+        on_dialing: Any | None = None,
         on_ringing: Any | None = None,
         on_idle: Any | None = None,
         log: Any = LOG.info,
@@ -215,6 +216,7 @@ class CallSessionSupervisor:
         self.mute_sinks = mute_sinks
         self.restore_sinks = restore_sinks
         self.on_end = on_end
+        self.on_dialing = on_dialing
         self.on_ringing = on_ringing
         self.on_idle = on_idle
         self.log = log
@@ -237,6 +239,7 @@ class CallSessionSupervisor:
         self.call_session_id: str | None = None
         self._start_rejected = False
         self._ringing_handled = False
+        self._dialing_handled = False
 
     def _acquire_worker_lock(self) -> bool:
         if self.worker_lock_path in _ACTIVE_CALL_LOCKS:
@@ -364,12 +367,25 @@ class CallSessionSupervisor:
                 self.log("MODEL_RESTORE_COMPLETE")
             self._start_rejected = False
             self._ringing_handled = False
+            self._dialing_handled = False
             if self.on_idle is not None:
                 self.on_idle()
             return
         if active:
             self.last_state = state
             self.unknown_since = None
+            if state == "DIALING" and not self._dialing_handled:
+                self._dialing_handled = True
+                if self.on_dialing is not None:
+                    try:
+                        accepted = self.on_dialing()
+                        if accepted is False:
+                            self._dialing_handled = False
+                            self.log("OUTBOUND_CALL_PREPARATION_DEFERRED reason=active_process")
+                    except Exception as exc:
+                        self.log(f"OUTBOUND_CALL_PREPARE_FAILED error={exc}")
+                        self._start_rejected = True
+                        return
             if state == "RINGING" and not self._ringing_handled:
                 self._ringing_handled = True
                 if self.on_ringing is not None:
@@ -545,13 +561,15 @@ class HermesPhoneRelay:
         script = Path(__file__).with_name("call_audio_loop.py")
         interpreter = os.environ.get("HERMES_PHONE_PYTHON", "")
         if not interpreter:
-            interpreter = shutil.which("python3") or sys.executable
+            interpreter = "/home/math3matica/.hermes/hermes-agent/venv/bin/python"
+            if not Path(interpreter).is_file():
+                interpreter = shutil.which("python3") or sys.executable
         log_path = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "phone-call-audio.log"
         log = log_path.open("a", encoding="utf-8")
         environment = {
             **os.environ,
-            "HERMES_ROOT": os.environ.get("HERMES_ROOT", str(Path.home() / ".hermes" / "hermes-agent")),
-            "REX_VOICE_ROOT": os.environ.get("REX_VOICE_ROOT", str(Path.home() / "hermes")),
+            "HERMES_ROOT": os.environ.get("HERMES_ROOT", "/home/math3matica/.hermes/hermes-agent"),
+            "REX_VOICE_ROOT": os.environ.get("REX_VOICE_ROOT", "/home/math3matica/hermes"),
             "HERMES_HOME": os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")),
             "HERMES_REX_VOICE_V1": os.environ.get("HERMES_REX_VOICE_V1", "1"),
             "OBSIDIAN_VAULT_PATH": os.environ.get(
@@ -580,6 +598,7 @@ class HermesPhoneRelay:
         temporary = self._inbound_readiness_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload) + "\n", encoding="utf-8")
         temporary.replace(self._inbound_readiness_path)
+
 
     def _prepare_gemma_after_answer(self, supervisor: Path) -> None:
         process: subprocess.Popen[str] | None = None
@@ -623,7 +642,10 @@ class HermesPhoneRelay:
         thread = self._inbound_prepare_thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5)
-        supervisor = Path(os.environ.get("REX_VOICE_SUPERVISOR", ""))
+        supervisor = Path(os.environ.get(
+            "REX_VOICE_SUPERVISOR",
+            "/home/math3matica/hermes/test-llama/model_supervisor.sh",
+        ))
         if not supervisor.is_file():
             self._inbound_call = False
             self._inbound_prepare_thread = None
@@ -642,7 +664,7 @@ class HermesPhoneRelay:
         """Return the verified normal-model identity, or no release authority."""
         supervisor = Path(os.environ.get(
             "REX_VOICE_SUPERVISOR",
-            os.environ.get("REX_VOICE_SUPERVISOR", ""),
+            "/home/math3matica/hermes/test-llama/model_supervisor.sh",
         ))
         if not supervisor.is_file():
             LOG.error("POST_CALL_RECOVERY_BLOCKED reason=supervisor_missing")
@@ -763,6 +785,30 @@ class HermesPhoneRelay:
         self._redial_deferred_call()
         self._recover_blocked_post_call_jobs()
 
+    def prepare_outbound_call(self) -> bool:
+        """Prepare Gemma during dialing so the worker can play the wait prompt."""
+        if self._relay_operation_active:
+            return False
+        if self._inbound_call or self._inbound_prepare_thread is not None:
+            return True
+        supervisor = Path(os.environ.get(
+            "REX_VOICE_SUPERVISOR",
+            "/home/math3matica/hermes/test-llama/model_supervisor.sh",
+        ))
+        if not supervisor.is_file():
+            raise RuntimeError("model supervisor is unavailable")
+        self._write_inbound_readiness("waiting")
+        self._inbound_call = True
+        self._inbound_prepare_thread = threading.Thread(
+            target=self._prepare_gemma_after_answer,
+            args=(supervisor,),
+            name="rex-outbound-gemma-preparation",
+            daemon=True,
+        )
+        self._inbound_prepare_thread.start()
+        LOG.info("OUTBOUND_CALL_PREPARATION_STARTED")
+        return True
+
     def prepare_inbound_call(self) -> bool:
         """Answer first, then prepare Gemma while the worker plays the wait prompt."""
         if not self.inbound_caller_is_authorized():
@@ -772,7 +818,10 @@ class HermesPhoneRelay:
             return False
         if self._inbound_call or self._inbound_prepare_thread is not None:
             return True
-        supervisor = Path(os.environ.get("REX_VOICE_SUPERVISOR", ""))
+        supervisor = Path(os.environ.get(
+            "REX_VOICE_SUPERVISOR",
+            "/home/math3matica/hermes/test-llama/model_supervisor.sh",
+        ))
         if not supervisor.is_file():
             raise RuntimeError("model supervisor is unavailable")
         self._write_inbound_readiness("waiting")
@@ -838,6 +887,7 @@ class HermesPhoneRelay:
             mute_sinks=self.mute_call_sinks,
             restore_sinks=self.restore_call_sinks,
             on_end=self.restore_qwen_after_call,
+            on_dialing=self.prepare_outbound_call,
             on_ringing=self.prepare_inbound_call,
             on_idle=self._on_idle,
             log=LOG.info,

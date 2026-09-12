@@ -496,6 +496,25 @@ def test_one_offhook_event_starts_one_worker(tmp_path):
     assert supervisor._worker_lock is None
 
 
+def test_outbound_dialing_callback_runs_before_offhook_worker(tmp_path):
+    events = []
+    supervisor = CallSessionSupervisor(
+        phone_state=lambda: ["DIALING", "OFFHOOK"][len([e for e in events if e == "prep"])],
+        hfp_nodes=lambda: True,
+        worker_factory=lambda: (events.append("worker"), _LifecycleWorker())[1],
+        mute_sinks=lambda: None,
+        restore_sinks=lambda: None,
+        on_dialing=lambda: events.append("prep") or True,
+        log=events.append,
+        worker_lock_path=tmp_path / "call-worker.lock",
+    )
+
+    supervisor.tick()
+    supervisor.tick()
+
+    assert events.index("prep") < events.index("worker")
+
+
 def test_relay_passes_session_id_to_worker_and_holds_lock(tmp_path):
     events = []
     worker = _LifecycleWorker()
