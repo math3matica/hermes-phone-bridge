@@ -1,5 +1,8 @@
 # Hermes Phone Bridge
 
+**Canonical development and runtime source:** this repository, `/home/math3matica/hermes-phone-bridge`.
+The preserved directory `/home/math3matica/hermes-plugins-archives/hermes-phone-bridge-legacy-archive` is historical rollback material only; do not develop or install from it.
+
 Standalone host integration and experimental Android source for the frozen
 RexBridge transport used by Hermes. The project is intentionally split into
 three independently owned layers:
