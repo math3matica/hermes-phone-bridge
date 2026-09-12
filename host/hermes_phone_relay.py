@@ -696,11 +696,11 @@ class HermesPhoneRelay:
         ):
             LOG.error("POST_CALL_RECOVERY_BLOCKED reason=qwen_not_ready")
             return None
-        model = os.environ.get("REX_POST_CALL_MODEL") or str(qwen["model"])
+        model = os.environ.get("REX_POST_CALL_WORK_MODEL") or os.environ.get("REX_POST_CALL_MODEL") or str(qwen["model"])
         if model != qwen["model"]:
             LOG.error("POST_CALL_RECOVERY_BLOCKED reason=model_mismatch")
             return None
-        return model, os.environ.get("REX_POST_CALL_PROVIDER", "Qwen 27B")
+        return model, os.environ.get("REX_POST_CALL_WORK_PROVIDER", os.environ.get("REX_POST_CALL_PROVIDER", "Qwen 27B"))
 
     def _recover_blocked_post_call_jobs(self) -> None:
         """Retry only jobs blocked because the call was still active.
