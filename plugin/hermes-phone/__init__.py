@@ -57,7 +57,10 @@ def _owner_number() -> str:
 
 
 def _supervisor(command: str) -> subprocess.CompletedProcess[str]:
-    supervisor = os.environ.get("HERMES_PHONE_MODEL_SUPERVISOR", "").strip()
+    supervisor = os.environ.get(
+        "HERMES_PHONE_MODEL_SUPERVISOR",
+        "/home/math3matica/hermes/test-llama/model_supervisor.sh",
+    ).strip()
     if not supervisor:
         raise RuntimeError("HERMES_PHONE_MODEL_SUPERVISOR is not configured")
     return subprocess.run(
@@ -155,18 +158,21 @@ def _call(args: dict[str, Any], **kwargs: Any) -> str:
     # numbers here would turn a conversational tool into a dialler for anyone.
     if requested and requested != owner:
         raise ValueError("phone_call may target only the configured owner")
-    # The relay owns call-scoped model preparation.  Preparing Gemma here as
-    # well races the relay's RINGING transition: one supervisor can restore
-    # Qwen while the call worker is using Gemma.  Only verify the independent
-    # TTS dependency before dialing; the relay waits for its own readiness
-    # marker before the worker speaks.
+    # Outbound calls prepare Gemma before issuing the Android call intent. This
+    # prevents the relay from racing model switching after DIALING and means
+    # the inbound-only preparation recording is never played outbound.
     if not _health("http://127.0.0.1:5187"):
         try: _restore_qwen()
         except Exception: pass
         raise RuntimeError("Kokoro TTS health verification failed; call not dialed")
     try:
+        prepared = _supervisor("switch-to-gemma")
+        if prepared.returncode != 0 or not _health("http://127.0.0.1:8082"):
+            try: _restore_qwen()
+            except Exception: pass
+            raise RuntimeError("Gemma voice model was not ready; call not dialed")
         launch = _direct_call(owner)
-        return json.dumps({"ok": True, "call_intent": launch, "number": owner, "voice_prepared": "relay_pending"}, ensure_ascii=False)
+        return json.dumps({"ok": True, "call_intent": launch, "number": owner, "voice_prepared": "ready_before_dial"}, ensure_ascii=False)
     except Exception:
         try: _restore_qwen()
         except Exception: pass

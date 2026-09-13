@@ -20,6 +20,8 @@ three independently owned layers:
 
 ## Safety and scope
 
+The governing feature, flow, ownership, evidence, and change-control specification is [`docs/PLUGIN_SPEC.md`](docs/PLUGIN_SPEC.md). Read it before modifying Hermes Phone Bridge.
+
 The V1 wire contract is preserved: ADB invokes a device-local listener at
 `127.0.0.1:9999`, and `READ_INBOX` is consume-on-read. The host relay owns
 owner filtering, durable queue state, and process locking. The Hermes plugin

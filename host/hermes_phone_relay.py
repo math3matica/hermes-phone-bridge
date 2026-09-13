@@ -597,6 +597,10 @@ class HermesPhoneRelay:
             ),
             "HERMES_HOME": os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")),
             "HERMES_REX_VOICE_V1": os.environ.get("HERMES_REX_VOICE_V1", "1"),
+            "HERMES_CALL_ASSISTANT_DATA_ROOT": os.environ.get(
+                "HERMES_CALL_ASSISTANT_DATA_ROOT",
+                str(Path.home() / "Documents" / "Hermes Call Assistant"),
+            ),
             "OBSIDIAN_VAULT_PATH": os.environ.get(
                 "OBSIDIAN_VAULT_PATH", str(Path.home() / "Documents" / "Rex Vault")
             ),
@@ -605,6 +609,10 @@ class HermesPhoneRelay:
         }
         if self._inbound_call:
             environment["HERMES_INBOUND_CALL"] = "1"
+        else:
+            # Do not let a stale service-level environment value turn an
+            # outbound session into the inbound wait-message flow.
+            environment.pop("HERMES_INBOUND_CALL", None)
         try:
             return subprocess.Popen(
                 [interpreter, str(script), "--session-sinks-managed"],
@@ -736,10 +744,12 @@ class HermesPhoneRelay:
         detached launches when idle is polled repeatedly or another relay
         path races this recovery.
         """
-        artifacts = Path(os.environ.get(
-            "REX_VOICE_ARTIFACTS",
-            str(Path.home() / ".hermes/cache/rex-voice-v1"),
-        )).expanduser()
+        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")).expanduser()
+        artifacts = Path(
+            os.environ.get("HERMES_CALL_ASSISTANT_ARTIFACTS")
+            or os.environ.get("REX_VOICE_ARTIFACTS")
+            or hermes_home / "cache/hermes-call-assistant"
+        ).expanduser()
         queue_root = artifacts / "post-call"
         if not (queue_root / "jobs").is_dir():
             return
@@ -757,7 +767,11 @@ class HermesPhoneRelay:
             gate = job.get("execution_gate", {})
             if gate.get("status") not in {"awaiting_normal_model", "blocked"}:
                 continue
-            if gate.get("status") == "blocked" and gate.get("reason") not in {"call_not_idle", "qwen_not_ready"}:
+            if gate.get("status") == "blocked" and gate.get("reason") not in {
+                "call_not_idle",
+                "normal_model_not_ready",
+                "qwen_not_ready",
+            }:
                 continue
             session_id = str(job.get("session_id", ""))
             if not session_id:
@@ -775,7 +789,11 @@ class HermesPhoneRelay:
                 current_gate = current.get("execution_gate", {})
                 if current_gate.get("status") not in {"awaiting_normal_model", "blocked"}:
                     continue
-                if current_gate.get("status") == "blocked" and current_gate.get("reason") not in {"call_not_idle", "qwen_not_ready"}:
+                if current_gate.get("status") == "blocked" and current_gate.get("reason") not in {
+                    "call_not_idle",
+                    "normal_model_not_ready",
+                    "qwen_not_ready",
+                }:
                     continue
                 environment = {
                     **os.environ,
@@ -811,7 +829,12 @@ class HermesPhoneRelay:
         self._recover_blocked_post_call_jobs()
 
     def prepare_outbound_call(self) -> bool:
-        """Prepare Gemma during dialing so the worker can play the wait prompt."""
+        """Ensure Gemma is ready for an outbound call worker.
+
+        The phone tool prepares Gemma before dialing. This callback remains a
+        safe fallback for calls initiated outside that tool, but does not start
+        a second switch when pre-dial preparation is already complete.
+        """
         if self._relay_operation_active:
             return False
         if self._inbound_call or self._inbound_prepare_thread is not None:
@@ -822,6 +845,25 @@ class HermesPhoneRelay:
         ))
         if not supervisor.is_file():
             raise RuntimeError("model supervisor is unavailable")
+        status = subprocess.run(
+            ["bash", str(supervisor), "status"], capture_output=True, text=True, timeout=30, check=False,
+        )
+        try:
+            payload = json.loads(status.stdout)
+            state = payload.get("state_file", {})
+            gemma = payload.get("gemma", {})
+            if (
+                status.returncode == 0
+                and state.get("state") == "GEMMA_READY"
+                and state.get("active_model") in {"gemma", "gemma4"}
+                and payload.get("lock") == "held"
+                and gemma.get("health") is True
+            ):
+                self._write_inbound_readiness("ready")
+                LOG.info("OUTBOUND_CALL_PREPARATION_ALREADY_READY")
+                return True
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
         self._write_inbound_readiness("waiting")
         self._inbound_call = True
         self._inbound_prepare_thread = threading.Thread(

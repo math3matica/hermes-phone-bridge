@@ -365,6 +365,42 @@ def test_idle_releases_job_waiting_for_normal_model_after_qwen_recovery(tmp_path
 
 
 @pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
+def test_idle_recovery_scans_current_queue_and_releases_normal_model_block(tmp_path, monkeypatch):
+    from rex_voice_v1.post_call import PostCallQueue
+
+    hermes_home = tmp_path / "hermes-home"
+    artifacts = hermes_home / "cache" / "hermes-call-assistant"
+    queue = PostCallQueue(artifacts / "post-call")
+    queue.enqueue("hermes-call-assistant-recover", {"session_id": "hermes-call-assistant-recover"})
+    job = queue.load("hermes-call-assistant-recover")
+    job["execution_gate"] = {"status": "blocked", "reason": "normal_model_not_ready"}
+    queue.save(job)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("HERMES_CALL_ASSISTANT_ARTIFACTS", raising=False)
+    monkeypatch.delenv("REX_VOICE_ARTIFACTS", raising=False)
+    monkeypatch.setattr("hermes_phone_relay.HermesPhoneRelay._qwen_ready_for_post_call", lambda _self: ("/models/qwen.gguf", "Qwen 27B"))
+    started = []
+    monkeypatch.setattr(
+        "rex_voice_v1.post_call_worker.start_detached",
+        lambda root, session_id, **kwargs: started.append((root, session_id, kwargs)) or type("Worker", (), {"pid": 45})(),
+    )
+
+    relay = HermesPhoneRelay(state_path=tmp_path / "state.json", adb="adb")
+    relay._recover_blocked_post_call_jobs()
+
+    recovered = queue.load("hermes-call-assistant-recover")
+    assert recovered["execution_gate"] == {
+        "status": "released",
+        "model": "/models/qwen.gguf",
+        "provider": "Qwen 27B",
+    }
+    assert [(root, session_id) for root, session_id, _kwargs in started] == [
+        (artifacts / "post-call", "hermes-call-assistant-recover")
+    ]
+
+
+@pytest.mark.skipif(importlib.util.find_spec("rex_voice_v1") is None, reason="optional Rex Voice runtime is not installed")
 def test_idle_recovery_releases_before_launch_and_is_idempotent(tmp_path, monkeypatch):
     from rex_voice_v1.post_call import PostCallQueue
 
@@ -673,13 +709,14 @@ def test_phone_call_path_plus_relay_supervision_still_has_one_worker(tmp_path, m
     monkeypatch.setenv("HERMES_PHONE_OWNER", "+155****0199")
     health_urls = []
     monkeypatch.setattr(plugin, "_health", lambda url, expected_model=None: health_urls.append((url, expected_model)) or True)
+    monkeypatch.setattr(plugin, "_supervisor", lambda command: subprocess.CompletedProcess(command, 0, "", ""))
     monkeypatch.setattr(plugin, "_direct_call", lambda phone: "Status: ok")
     with patch.object(plugin.subprocess, "Popen", side_effect=AssertionError("phone_call spawned audio worker")):
         result = plugin._call({})
     payload = json.loads(result)
     assert payload["ok"] is True
-    assert payload["voice_prepared"] == "relay_pending"
-    assert health_urls == [("http://127.0.0.1:5187", None)]
+    assert payload["voice_prepared"] == "ready_before_dial"
+    assert health_urls == [("http://127.0.0.1:5187", None), ("http://127.0.0.1:8082", None)]
 
     events = []
     workers = [_LifecycleWorker()]
@@ -687,6 +724,30 @@ def test_phone_call_path_plus_relay_supervision_still_has_one_worker(tmp_path, m
     supervisor.tick()
     assert len([event for event in events if event.startswith("CALL_SESSION_START")]) == 1
     supervisor.tick()
+
+
+def test_prepared_outbound_call_does_not_enable_inbound_wait_message(tmp_path, monkeypatch):
+    supervisor = tmp_path / "model_supervisor.sh"
+    supervisor.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("REX_VOICE_SUPERVISOR", str(supervisor))
+    monkeypatch.setenv("HERMES_INBOUND_READINESS_PATH", str(tmp_path / "readiness.json"))
+    status = {
+        "state_file": {"state": "GEMMA_READY", "active_model": "gemma"},
+        "gemma": {"health": True},
+        "lock": "held",
+    }
+    monkeypatch.setattr(
+        "hermes_phone_relay.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, json.dumps(status), ""),
+    )
+
+    relay = HermesPhoneRelay(state_path=tmp_path / "state.json", adb="adb")
+
+    assert relay.prepare_outbound_call() is True
+    assert relay._inbound_call is False
+    assert relay._inbound_prepare_thread is None
+    assert json.loads(relay._inbound_readiness_path.read_text(encoding="utf-8"))["status"] == "ready"
+
 
 def test_idle_exits_worker_and_next_fresh_call_gets_one_new_worker(tmp_path):
     events = []

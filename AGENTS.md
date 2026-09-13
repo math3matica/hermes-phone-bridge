@@ -8,6 +8,7 @@
 - The installed Call Assistant plugin is `~/.hermes/plugins/hermes-call-assistant`.
 - `/home/math3matica/hermes` is not the canonical Call Assistant source and must not be selected as the production `REX_VOICE_ROOT`.
 
+Read `docs/PLUGIN_SPEC.md` before changing the phone plugin, relay, Android transport, call worker, or audio path. Read the canonical Call Assistant `docs/PLUGIN_SPEC.md` and `docs/PLUGIN_DESIGN.md` for cross-repository call changes.
 Read the Call Assistant `docs/OPERATIONS.md` and `docs/OWNERSHIP.md` when changing the cross-repository call path.
 
 ## Runtime rules
