@@ -398,6 +398,26 @@ class CallSessionSupervisor:
                         self.log(f"INBOUND_CALL_PREPARE_FAILED error={exc}")
                         self._start_rejected = True
                         return
+            # A fast outbound call can move from IDLE straight to OFFHOOK
+            # between relay polls.  Preserve the outbound model-preparation
+            # boundary instead of starting the worker while Qwen is still
+            # occupying the GPU.
+            if (
+                state == "OFFHOOK"
+                and not self._dialing_handled
+                and not self._ringing_handled
+                and self.on_dialing is not None
+            ):
+                self._dialing_handled = True
+                try:
+                    accepted = self.on_dialing()
+                    if accepted is False:
+                        self._dialing_handled = False
+                        self.log("OUTBOUND_CALL_PREPARATION_DEFERRED reason=active_process")
+                except Exception as exc:
+                    self.log(f"OUTBOUND_CALL_PREPARE_FAILED error={exc}")
+                    self._start_rejected = True
+                    return
             if state == "OFFHOOK" and not self.session_active and not self._start_rejected:
                 self._start()
         elif state == "UNKNOWN":
@@ -569,7 +589,12 @@ class HermesPhoneRelay:
         environment = {
             **os.environ,
             "HERMES_ROOT": os.environ.get("HERMES_ROOT", "/home/math3matica/.hermes/hermes-agent"),
-            "REX_VOICE_ROOT": os.environ.get("REX_VOICE_ROOT", "/home/math3matica/hermes"),
+            # The standalone Call Assistant checkout is canonical.  Keep this
+            # explicit in the child environment so the worker cannot silently
+            # import the retired integrated checkout from the relay's cwd.
+            "REX_VOICE_ROOT": os.environ.get(
+                "REX_VOICE_ROOT", "/home/math3matica/hermes-call-assistant"
+            ),
             "HERMES_HOME": os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")),
             "HERMES_REX_VOICE_V1": os.environ.get("HERMES_REX_VOICE_V1", "1"),
             "OBSIDIAN_VAULT_PATH": os.environ.get(
@@ -1073,7 +1098,12 @@ def main() -> int:
     parser.add_argument(
         "--qwen-compose-dir",
         type=Path,
-        default=Path(os.environ.get("HERMES_PHONE_QWEN_COMPOSE_DIR", os.environ.get("REX_VOICE_ROOT", str(Path.home() / "hermes")))),
+        default=Path(
+            os.environ.get(
+                "HERMES_PHONE_QWEN_COMPOSE_DIR",
+                os.environ.get("REX_VOICE_ROOT", "/home/math3matica/hermes-call-assistant"),
+            )
+        ),
     )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--verbose", action="store_true")
@@ -1088,6 +1118,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
+    supervisor_stop: threading.Event | None = None
     try:
         relay = HermesPhoneRelay(
             owner=args.owner,
@@ -1106,17 +1137,31 @@ def main() -> int:
             LOG.info("relay pass: queued=%d replied=%d", added, completed)
             return 0
         LOG.info("SMS relay active for owner %s", relay.owner)
+        supervisor_stop = threading.Event()
+
+        def supervise_calls() -> None:
+            while not supervisor_stop.is_set():
+                try:
+                    call_supervisor.tick()
+                except Exception:
+                    LOG.exception("call-session supervision failed; preserving call safety state")
+                supervisor_stop.wait(max(1.0, args.poll_interval))
+
+        supervisor_thread = threading.Thread(
+            target=supervise_calls,
+            name="hermes-phone-call-supervisor",
+            daemon=True,
+        )
+        supervisor_thread.start()
         while True:
-            try:
-                call_supervisor.tick()
-            except Exception:
-                LOG.exception("call-session supervision failed; preserving call safety state")
             try:
                 relay.run_once()
             except Exception:
                 LOG.exception("relay pass failed; preserving durable queue")
             time.sleep(max(1.0, args.poll_interval))
     finally:
+        if supervisor_stop is not None:
+            supervisor_stop.set()
         relay_lock.release()
 
 

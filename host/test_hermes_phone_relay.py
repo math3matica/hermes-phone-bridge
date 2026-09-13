@@ -515,6 +515,24 @@ def test_outbound_dialing_callback_runs_before_offhook_worker(tmp_path):
     assert events.index("prep") < events.index("worker")
 
 
+def test_fast_outbound_offhook_starts_preparation_before_worker(tmp_path):
+    events = []
+    supervisor = CallSessionSupervisor(
+        phone_state=lambda: "OFFHOOK",
+        hfp_nodes=lambda: True,
+        worker_factory=lambda: (events.append("worker"), _LifecycleWorker())[1],
+        mute_sinks=lambda: None,
+        restore_sinks=lambda: None,
+        on_dialing=lambda: events.append("prep") or True,
+        log=events.append,
+        worker_lock_path=tmp_path / "call-worker.lock",
+    )
+
+    supervisor.tick()
+
+    assert events.index("prep") < events.index("worker")
+
+
 def test_relay_passes_session_id_to_worker_and_holds_lock(tmp_path):
     events = []
     worker = _LifecycleWorker()
@@ -568,6 +586,7 @@ def test_production_runtime_session_id_is_end_to_end(tmp_path, monkeypatch):
     assert "--max-turns" not in command
     assert environment["HERMES_CALL_WORKER_SESSION_ID"] == "call-abc123"
     assert environment["HERMES_REX_VOICE_V1"] == "1"
+    assert environment["REX_VOICE_ROOT"] == "/home/math3matica/hermes-call-assistant"
 
     class FakeCoordinator:
         def __init__(self, config, acceptance_gate=None):
